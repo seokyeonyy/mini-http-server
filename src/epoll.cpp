@@ -1,4 +1,5 @@
 #include <iostream>
+#include <vector>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +42,7 @@ typedef struct {
 
     time_t last_active;
 } ClientSession;
+std::vector<ClientSession*> g_sessions;
 
 // 1.Create_Session  정의 
 ClientSession* create_session(int fd) {
@@ -51,6 +53,7 @@ ClientSession* create_session(int fd) {
     s->fd = fd;
     s->state = STATE_READING_HEADER; // 초기 상태: HTTP 헤더 읽기
     s->last_active = time(NULL);     // 현재 시간 기록
+    g_sessions.push_back(s);         // 생성된 세션을 벡터에 추가
 
     return s;
 }
@@ -62,6 +65,15 @@ void close_session(int epoll_fd, ClientSession* s)
 {
     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, s->fd, NULL);
     close(s->fd);
+
+    for (auto it=g_sessions.begin(); it != g_sessions.end(); ++it)
+    {
+        if(*it==s){
+            g_sessions.erase(it);
+            break;
+        }
+    }
+    
     free(s);
 }
 //Non-blocking Read & HTTP Parshig Handler
@@ -70,7 +82,7 @@ void handle_read(int epoll_fd, ClientSession* s)
     s->last_active=time(NULL);
 
     while(1){
-        ssize_t bytes=read(s->fd, s->read_buf+s->read_pos, sizeof(s->read_buf+ s->write_pos, s->write_len - s->write_pos));
+        ssize_t bytes = read(s->fd, s->read_buf + s->read_pos, sizeof(s->read_buf) - s->read_pos - 1);
     
         if(bytes<0)
         {
@@ -96,19 +108,36 @@ void handle_read(int epoll_fd, ClientSession* s)
             char* header_end=strstr(s->read_buf, "\r\n\r\n");
             if(header_end != NULL)
             {
-                //response buffer
-                const char* body="<html><body><h1>200 OK</h1></body></html>";
-                snprintf(s->write_buf, sizeof(s->write_buf),
-                "HTTP/1.1 200 OK\r\n"
-                "Content-Length:%zu\r\n"
-                "Content-Type:text/html\r\n"
-                "Connection:close\r\n\r\n%s",
-                strlen(body), body);
+                sscanf(s->read_buf, "%s %s", s->method, s->path);
 
-                s->write_len=strlen(s->write_buf);
+                char file_path[512];
+                if(strcmp(s->path, "/")==0)
+                {
+                    snprintf(file_path, sizeof(file_path), "./www/index.html");
+                }else{
+                    snprintf(file_path, sizeof(file_path), "./www%s", s->path);
+                }
+                int fd=open(file_path, O_RDONLY);
+                if(fd<0)
+                {
+                    const char* body="<html><body><h1>404 Not Found</h1></body></html>";
+                    snprintf(s->write_buf, sizeof(s->write_buf), "HTTP/1.1 404 Not Found\r\nContent-Length: %zu\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n%s",
+                    strlen(body), body);
+                }
+                else{
+                    off_t fsize=lseek(fd, 0, SEEK_END);
+                    lseek(fd, 0, SEEK_SET);
+
+                    int header_len=snprintf(s->write_buf, sizeof(s->write_buf),"HTTP/1.1 200 OK\r\nContent-Length: %ld\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n", fsize);
+
+                    read(fd, s->write_buf+header_len, sizeof(s->write_buf)- header_len -1);
+                    s->write_len=header_len+fsize;
+                    close(fd);
+                }
                 s->write_pos=0;
                 s->state=STATE_WRITING;
 
+            
                 //// EPOLLOUT 이벤트 감시로 전환
                 struct epoll_event ev;
                 ev.events=EPOLLOUT|EPOLLET;
@@ -127,7 +156,7 @@ void handle_write(int epoll_fd, ClientSession* s)
     s->last_active=time(NULL);
     while(s->write_pos < s->write_len)
     {
-        ssize_t bytes=write(s->fd, s->write_buf + s->write_pos, s->write_len - s->write_pos);
+        ssize_t bytes = write(s->fd, s->write_buf + s->write_pos, s->write_len - s->write_pos);
     
         if(bytes<0)
         {
@@ -153,30 +182,61 @@ void run_event_loop(int epoll_fd, int listen_fd)
     while(1)
     {
         int nfds=epoll_wait(epoll_fd, events, MAX_EVENTS, 1000); //1s timeout
+        
+        //[타임아웃 체크 로직] 1초 동안 이벤트가 없거나 깨어났을 때 검사
+        time_t current_time=time(NULL);
+        const double TIMEOUT_LIMIT=10.0;
+
+        //벡터를 안전하게 순회하며 타임아웃된 세션 정리
+        for(auto it=g_sessions.begin(); it!=g_sessions.end();)
+        {
+            ClientSession* s=*it;
+            if(current_time-s->last_active>TIMEOUT_LIMIT)
+            {
+                cout<<"Session timeout! FD: "<<s->fd<<endl;
+                close_session(epoll_fd, s); // 이 안에서 g_sessions.erase가 호출되므로
+                it=g_sessions.begin(); // 안전하게이터레이터를 처음부터 다시 잡거나 재정렬
+            }else{
+                ++it;
+            }
+        }
+        
         for(int i=0;i<nfds;i++)
         {
             //Listen socket new connection
-            if(events[i].data.fd==listen_fd)
-            {
-                struct sockaddr_in client_addr;
-                socklen_t client_len=sizeof(client_addr);
-                int client_fd=accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
-            
-                if(client_fd != -1)
-                {
-                    fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0)| O_NONBLOCK);
+            if (events[i].data.fd == listen_fd) {
+    // EAGAIN이 뜰 때까지 반복하여 대기 중인 모든 접속 요청을 교체 처리
+    while (1) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        int client_fd = accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
 
-                
-                    ClientSession* s= create_session(client_fd);
-                    struct epoll_event ev;
-                    ev.events=EPOLLIN|EPOLLET;
-                    ev.data.ptr=s;
-                    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev);
-                
-                
-                }
-            
+        if (client_fd < 0) {
+            // 더 이상 수락할 대기 커넥션이 없으면 루프 탈출 (정상 소진)
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
             }
+            // 시스템 시그널에 의해 중단된 경우 계속 진행
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+
+        // 수락된 클라이언트 소켓을 Non-blocking으로 전환
+        fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK);
+
+        // 세션 생성 및 epoll 감시 대상 추가
+        ClientSession* s = create_session(client_fd);
+        if (s) {
+            struct epoll_event ev;
+            ev.events = EPOLLIN | EPOLLET;
+            ev.data.ptr = s;
+            epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev);
+        }
+    }
+}
+  
             // 클라이언트 데이터 입출력 처리
             else{
                 ClientSession* s = (ClientSession*)events[i].data.ptr;
@@ -229,7 +289,7 @@ int main() {
     // epoll 인스턴스 생성 및 listen_fd 등록 
     int epoll_fd = epoll_create1(0);
     struct epoll_event ev;
-    ev.events = EPOLLIN;
+    ev.events = EPOLLIN | EPOLLET; //Starvation code + EPOLLET
     ev.data.fd = listen_fd;
     epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_fd, &ev);
 

@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <unistd.h>
 #include <sys/epoll.h>
+#include <cstring>
 
 // 전역 세션 목록의 실제 정의 (프로젝트 전체에서 여기 한 곳만)
 std::vector<ClientSession*> g_sessions;
@@ -35,4 +36,22 @@ void close_session(int epoll_fd, ClientSession* s)
     }
 
     free(s);
+}
+
+//처리한 요청만큼 버퍼에서 제거하고, 남은 바이트(다음 요청)를 앞으로 당김
+void reset_session(ClientSession* s)
+{
+    size_t remain=s->read_pos-s->req_len;
+    memmove(s->read_buf, s->read_buf+s->req_len, remain);
+    s->read_pos=remain;
+    s->read_buf[s->read_pos]='\0';
+
+    s->method[0]=s->path[0]=s->version[0]='\0';
+    s->write_pos=s->write_len=0;
+    s->req_len=0;
+    s->keep_alive=0;
+    s->req_count++;
+    s->state=STATE_READING_HEADER;
+    s->last_active=time(NULL);
+
 }

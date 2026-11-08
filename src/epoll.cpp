@@ -18,6 +18,22 @@ using std::endl;
 
 #define MAX_EVENTS 1024
 
+//read_buf에 완성된 요청이 있으면 처리하고 쓰기 모드로 전환
+static void try_process(int epoll_fd, ClientSession* s)
+{
+    if(s->state!=STATE_READING_HEADER) return;
+    if(strstr(s->read_buf, "\r\n\r\n")==NULL) return; // 아직 헤더 미완성
+
+    handle_request(s);
+
+    struct epoll_event ev;
+    ev.events=EPOLLOUT|EPOLLET|EPOLLRDHUP;
+    ev.data.ptr=s;
+    epoll_ctl(epoll_fd, EPOLL_CTL_MOD, s->fd, &ev);
+
+}
+
+
 // Non-blocking Read Handler
 static void handle_read(int epoll_fd, ClientSession* s)
 {
@@ -44,25 +60,15 @@ static void handle_read(int epoll_fd, ClientSession* s)
         s->read_pos += bytes;
         s->read_buf[s->read_pos] = '\0';
 
-        // 헤더가 완성되면 파싱과 응답 생성은 http_Parsing.cpp에 위임
-        if (s->state == STATE_READING_HEADER &&
-            strstr(s->read_buf, "\r\n\r\n") != NULL)
-        {
-            handle_request(s);
-
-            // EPOLLOUT 이벤트 감시로 전환
-            struct epoll_event ev;
-            ev.events = EPOLLOUT | EPOLLET;
-            ev.data.ptr = s;
-            epoll_ctl(epoll_fd, EPOLL_CTL_MOD, s->fd, &ev);
-            break;
-        }
+        try_process(epoll_fd, s);
+        if(s->state==STATE_WRITING) break;
     }
 }
 
 // Non-blocking Write Handler
 static void handle_write(int epoll_fd, ClientSession* s)
 {
+    
     s->last_active = time(NULL);
     while (s->write_pos < s->write_len)
     {
@@ -79,9 +85,22 @@ static void handle_write(int epoll_fd, ClientSession* s)
         }
         s->write_pos += bytes;
     }
-    close_session(epoll_fd, s);   // keep-alive 구현 시 이 부분을 바꾸게 됨
-}
+    //keep-alive
+    if(!s->keep_alive)
+    {
+        close_session(epoll_fd, s);
+        return;
+    }
+    //keep-alive:연결은 유지하고 다음 요청을 기다림
+    reset_session(s);
 
+    struct epoll_event ev;
+    ev.events=EPOLLIN|EPOLLET|EPOLLRDHUP;
+    ev.data.ptr=s;
+    epoll_ctl(epoll_fd, EPOLL_CTL_MOD, s->fd, &ev);
+
+    try_process(epoll_fd, s); // 이미 받아둔 다음 요청이 있으면 바로 처리
+}
 // Event Loop
 void run_event_loop(int epoll_fd, int listen_fd)
 {

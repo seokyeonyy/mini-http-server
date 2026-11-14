@@ -1,6 +1,6 @@
 #include "session_pool.h"
 #include <cstdio>
-
+#include <sanitizer/asan_interface.h> 
 #define POOL_SIZE 1024
 
 // 세션 본체: 서버 시작 시점에 1024개를 한 번에 확보 (약 16MB)
@@ -15,13 +15,18 @@ void pool_init()
     for(int i=0;i<POOL_SIZE;i++)
     {
         g_free_list[i]=&g_pool[i];
+        ASAN_POISON_MEMORY_REGION(&g_pool[i], sizeof(ClientSession));    // 처음엔 전부 사용 금지
     }
     g_free_top=POOL_SIZE;
 }
 ClientSession* pool_alloc()
 {
     if(g_free_top==0) return NULL;   // 풀이 바닥남
-    return g_free_list[--g_free_top];   // 스택 맨 위에서 하나 꺼냄
+    
+
+    ClientSession* s=g_free_list[--g_free_top];
+    ASAN_UNPOISON_MEMORY_REGION(s, sizeof(ClientSession));
+    return s;
 }
 
 void pool_free(ClientSession* s)
@@ -38,6 +43,7 @@ void pool_free(ClientSession* s)
         fprintf(stderr, "pool_free:double free detached\n");
         return;
     }
+    ASAN_POISON_MEMORY_REGION(s, sizeof(ClientSession));
     g_free_list[g_free_top++]=s;   // 스택 맨 위에 다시 올려둠
 }
 

@@ -132,13 +132,19 @@ void run_event_loop(int epoll_fd, int listen_fd)
                     // Non-blocking 전환
                     fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK);
 
-                    // 세션 생성 및 epoll 등록
                     ClientSession* s = create_session(client_fd);
-                    if (s) {
-                        struct epoll_event ev;
-                        ev.events = EPOLLIN | EPOLLET;
-                        ev.data.ptr = s;
-                        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev);
+                    if (!s) {
+                        // 풀이 가득 참: 받을 수 없는 연결은 바로 닫음
+                        close(client_fd);
+                        continue;
+                    }
+
+                    struct epoll_event ev;
+                    ev.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
+                    ev.data.ptr = s;
+                    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev) < 0) {
+                        // 등록 실패 시에도 세션과 소켓을 정리
+                        close_session(epoll_fd, s);
                     }
                 }
             }

@@ -1,4 +1,5 @@
-#pragma once
+#ifndef SESSION_H
+#define SESSION_H
 #include <ctime>
 #include <cstddef>
 #include <vector>
@@ -39,3 +40,5 @@ extern std::vector<ClientSession*> g_sessions;
 ClientSession* create_session(int fd);
 void close_session(int epoll_fd, ClientSession* s);
 void reset_session(ClientSession* s);
+
+#endif

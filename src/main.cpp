@@ -1,4 +1,5 @@
 #include "server.h"
+#include "session_pool.h"
 
 #include <iostream>
 #include <cstdio>
@@ -8,6 +9,9 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+using std::cout;
+using std::endl;
+
 
 int main() {
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -48,6 +52,8 @@ int main() {
     std::cout << "Server listening on port 8080..." << std::endl;
 
     // 이벤트 루프 실행
+    pool_init(); // 세션 풀 미리 확보
+    cout<<"Server listening on port 8080.."<<endl;
     run_event_loop(epoll_fd, listen_fd);
 
     close(listen_fd);

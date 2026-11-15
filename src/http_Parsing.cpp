@@ -1,3 +1,4 @@
+#include "file_cache.h"
 #include "http_parser.h"
 #include <cstdio>
 #include <cstring>
@@ -81,16 +82,10 @@ void handle_request(ClientSession* s)
         snprintf(file_path, sizeof(file_path), "./www%s", s->path);
     }
 
-    int fd = open(file_path, O_RDONLY);
-    if (fd < 0)
+    // 캐시에서 파일 정보 가져오기 (없으면 cache_get이 open + fstat 후 저장)
+    CacheEntry* e=cache_get(file_path);
+    if(e==NULL)
     {
-        build_simple_response(s, 404, "Not Found");
-        return;
-    }
-    struct stat st;
-    if(fstat(fd, &st)<0 || !S_ISREG(st.st_mode))
-    {
-        close(fd);
         build_simple_response(s, 404, "Not Found");
         return;
     }
@@ -100,14 +95,16 @@ void handle_request(ClientSession* s)
                             "Content-Length: %ld\r\n"
                             "Content-Type: text/html\r\n"
                             "Connection: %s\r\n\r\n",
-                            (long)st.st_size,
+                            (long)e->size,
                             s->keep_alive ? "keep-alive" : "close");
 
 
-    // 파일 fd는 닫지 않고 세션에 넘김 → handle_write에서 sendfile로 전송
-    s->file_fd=fd;
+    // 공유 fd를 빌려서 sendfile에 사용 (offset은 세션마다 따로)
+    s->file_entry=e;
+    s->file_fd=e->fd;
     s->file_off=0;
-    s->file_remain=st.st_size;
+    s->file_remain=e->size;
+    
     
     s->write_pos=0;
     s->state=STATE_WRITING;

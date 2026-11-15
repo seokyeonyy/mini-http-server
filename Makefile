@@ -6,7 +6,8 @@ SRCS = src/main.cpp \
        src/epoll.cpp \
        src/http_Parsing.cpp \
        src/session.cpp \
-       src/session_pool.cpp
+       src/session_pool.cpp \
+	   src/file_cache.cpp
 
 HEADERS = $(wildcard include/*.h)
 

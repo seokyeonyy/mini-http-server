@@ -13,6 +13,7 @@ enum ConnState {
     STATE_DISCONNECTING
 };
 
+struct CacheEntry;
 struct ClientSession {
     int fd;
     ConnState state;
@@ -34,6 +35,7 @@ struct ClientSession {
     int req_count;  // 이 연결에서 처리한 요청 수
     time_t last_active;
 
+    CacheEntry* file_entry;
     int file_fd; // 본문으로 보낼 파일 (-1이면 파일 본문 없음)
     off_t file_off; // 파일에서 다음에 보낼 위치
     size_t file_remain; // 남은 바이트 수

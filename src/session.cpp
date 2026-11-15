@@ -1,5 +1,6 @@
 #include "session.h"
 #include "session_pool.h"
+#include "file_cache.h"
 #include <cstdlib>
 #include <unistd.h>
 #include <sys/epoll.h>
@@ -20,6 +21,7 @@ ClientSession* create_session(int fd) {
     s->file_fd=-1;
     s->file_off=0;
     s->file_remain=0;
+    s->file_entry=NULL;
     
     s->read_pos=0;
     s->read_buf[0]='\0';
@@ -47,11 +49,13 @@ void close_session(int epoll_fd, ClientSession* s)
     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, s->fd, NULL);
     close(s->fd);
 
-    if(s->file_fd>=0)
+    if(s->file_entry)
     {
-        close(s->file_fd);
-        s->file_fd=-1;
+        cache_release(s->file_entry);  // fd는 닫지 않고 캐시에 반납
+        s->file_entry=NULL;
+       
     }
+    s->file_fd=-1;
 
     for (auto it = g_sessions.begin(); it != g_sessions.end(); ++it)
     {
@@ -67,11 +71,13 @@ void close_session(int epoll_fd, ClientSession* s)
 //처리한 요청만큼 버퍼에서 제거하고, 남은 바이트(다음 요청)를 앞으로 당김
 void reset_session(ClientSession* s)
 {
-    if(s->file_fd>=0)
+    if (s->file_entry) 
     {
-        close(s->file_fd);
-        s->file_fd=-1;
+        cache_release(s->file_entry);   // fd는 닫지 않고 캐시에 반납
+        s->file_entry = NULL;
     }
+    s->file_fd = -1;
+    
     s->file_off=0;
     s->file_remain=0;
 

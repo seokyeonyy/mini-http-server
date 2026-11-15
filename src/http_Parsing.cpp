@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <strings.h>
+#include <sys/stat.h>
 
 //[1] 상태 코드와 메시지만 주면 간단한 HTML 응답을 만들어 주는 함수
 static void build_simple_response(ClientSession* s, int code, const char* msg)
@@ -86,36 +87,30 @@ void handle_request(ClientSession* s)
         build_simple_response(s, 404, "Not Found");
         return;
     }
-    else {
-        off_t fsize = lseek(fd, 0, SEEK_END);
-        lseek(fd, 0, SEEK_SET);
-
-        int header_len = snprintf(s->write_buf, sizeof(s->write_buf),
-                                  "HTTP/1.1 200 OK\r\n"
-                                  "Content-Length: %ld\r\n"
-                                  "Content-Type: text/html\r\n"
-                                  "Connection: %s\r\n\r\n",
-                                  (long)fsize,
-                                  s->keep_alive ? "keep-alive":"close");
-
-        
-        //[4] 임시 방어: 본문이 버퍼에 다 안 들어가면 500 (sendfile 적용 전까지)
-        if((size_t)fsize>sizeof(s->write_buf)-header_len-1)
-        {
-            close(fd);
-            build_simple_response(s, 500, "Intermal Server Error");
-            return;
-        }
-        
-        read(fd, s->write_buf + header_len, sizeof(s->write_buf) - header_len - 1);
-        s->write_len = header_len + fsize;
+    struct stat st;
+    if(fstat(fd, &st)<0 || !S_ISREG(st.st_mode))
+    {
         close(fd);
-
-        s->write_pos=0;
-        s->state=STATE_WRITING;
-
-     
-         
+        build_simple_response(s, 404, "Not Found");
+        return;
     }
+    // 헤더만 write_buf에 만듦 (본문은 sendfile로 따로 보냄)
+    s->write_len=snprintf(s->write_buf, sizeof(s->write_buf),
+                            "HTTP/1.1 200 OK\r\n"
+                            "Content-Length: %ld\r\n"
+                            "Content-Type: text/html\r\n"
+                            "Connection: %s\r\n\r\n",
+                            (long)st.st_size,
+                            s->keep_alive ? "keep-alive" : "close");
+
+
+    // 파일 fd는 닫지 않고 세션에 넘김 → handle_write에서 sendfile로 전송
+    s->file_fd=fd;
+    s->file_off=0;
+    s->file_remain=st.st_size;
+    
+    s->write_pos=0;
+    s->state=STATE_WRITING;
+   
 
 }

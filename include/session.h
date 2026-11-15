@@ -3,6 +3,7 @@
 #include <ctime>
 #include <cstddef>
 #include <vector>
+#include <sys/types.h>
 
 enum ConnState {
     STATE_READING_HEADER,
@@ -32,6 +33,12 @@ struct ClientSession {
     size_t req_len;  // 이번 요청이 read_buf에서 차지한 바이트 수
     int req_count;  // 이 연결에서 처리한 요청 수
     time_t last_active;
+
+    int file_fd; // 본문으로 보낼 파일 (-1이면 파일 본문 없음)
+    off_t file_off; // 파일에서 다음에 보낼 위치
+    size_t file_remain; // 남은 바이트 수
+
+
 };
 
 // 전역 세션 목록: 선언만 하고, 정의는 session.cpp에 있음

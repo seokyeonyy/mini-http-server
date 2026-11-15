@@ -12,6 +12,7 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/sendfile.h>
 
 using std::cout;
 using std::endl;
@@ -70,10 +71,13 @@ static void handle_write(int epoll_fd, ClientSession* s)
 {
     
     s->last_active = time(NULL);
+
+    // [1단계] 헤더(또는 짧은 에러 응답 전체) 전송
     while (s->write_pos < s->write_len)
     {
-        ssize_t bytes = write(s->fd, s->write_buf + s->write_pos,
-                              s->write_len - s->write_pos);
+        int flags=(s->file_remain>0)?MSG_MORE:0;
+        ssize_t bytes = send(s->fd, s->write_buf + s->write_pos,
+                              s->write_len - s->write_pos, flags);
 
         if (bytes < 0)
         {
@@ -85,7 +89,28 @@ static void handle_write(int epoll_fd, ClientSession* s)
         }
         s->write_pos += bytes;
     }
-    //keep-alive
+    // [2단계] 파일 본문을 sendfile로 전송
+    while(s->file_remain>0)
+    {
+        ssize_t sent=sendfile(s->fd, s->file_fd, &s->file_off, s->file_remain);
+        if(sent<0)
+        {
+            if(errno==EAGAIN || errno==EWOULDBLOCK) return;
+            if(errno==EINTR) continue;
+            close_session(epoll_fd, s);
+            return;
+        }
+        if(sent==0)
+        {
+            // 전송 도중 파일이 잘린 경우: Content-Length를 지킬 수 없으니 연결 종료
+            close_session(epoll_fd, s);
+            return;
+            
+        }
+        s->file_remain -= sent;
+    }
+
+    //[전송 완료] keep-alive
     if(!s->keep_alive)
     {
         close_session(epoll_fd, s);

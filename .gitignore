@@ -1,5 +1,7 @@
-build/
 *.o
 server
 test_runner
-www/big.bin
+server_before
+server_after
+www/*.bin
+www/testdir/

@@ -17,6 +17,9 @@ ClientSession* create_session(int fd) {
     // (버퍼 16KB 전체를 지우지 않고, 유효 범위를 나타내는 필드만 초기화)
     s->fd = fd;
     s->state = STATE_READING_HEADER; // 초기 상태: HTTP 헤더 읽기
+    s->file_fd=-1;
+    s->file_off=0;
+    s->file_remain=0;
     
     s->read_pos=0;
     s->read_buf[0]='\0';
@@ -44,6 +47,12 @@ void close_session(int epoll_fd, ClientSession* s)
     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, s->fd, NULL);
     close(s->fd);
 
+    if(s->file_fd>=0)
+    {
+        close(s->file_fd);
+        s->file_fd=-1;
+    }
+
     for (auto it = g_sessions.begin(); it != g_sessions.end(); ++it)
     {
         if (*it == s) {
@@ -58,6 +67,14 @@ void close_session(int epoll_fd, ClientSession* s)
 //처리한 요청만큼 버퍼에서 제거하고, 남은 바이트(다음 요청)를 앞으로 당김
 void reset_session(ClientSession* s)
 {
+    if(s->file_fd>=0)
+    {
+        close(s->file_fd);
+        s->file_fd=-1;
+    }
+    s->file_off=0;
+    s->file_remain=0;
+
     size_t remain=s->read_pos-s->req_len;
     memmove(s->read_buf, s->read_buf+s->req_len, remain);
     s->read_pos=remain;

@@ -1,0 +1,15 @@
+# server_before vs server_after, 5 rounds, http://127.0.0.1:8080/, wrk -t2 -c100 -d10s
+# round binary requests_per_sec latency_avg
+1 server_before 39113.14 2.51ms
+1 server_after 58302.46 1.57ms
+2 server_before 40653.46 2.41ms
+2 server_after 54535.16 1.72ms
+3 server_before 42792.67 2.29ms
+3 server_after 54391.67 1.65ms
+4 server_before 43815.46 2.22ms
+4 server_after 56140.47 1.61ms
+5 server_before 43164.39 2.26ms
+5 server_after 60200.55 1.52ms
+
+server_before 평균: 41908 req/s (5회)
+server_after 평균: 56714 req/s (5회)
